@@ -206,6 +206,109 @@ def formatear_salida(episodios: List[Dict[str, Any]], formato: str) -> str:
             resultado.append("-" * 40)
         return "\n".join(resultado)
 
+def buscar_episodio_por_numero(numero: str) -> Dict[str, Any]:
+    """
+    Busca un episodio específico por su número.
+    
+    Args:
+        numero: Número del episodio (ejemplo: '10939')
+        
+    Returns:
+        Dict con la información del episodio o None si no se encuentra
+    """
+    # Normalizar el número (quitar puntos y espacios)
+    numero_normalizado = numero.replace('.', '').strip()
+    logger.info(f"Buscando episodio número: {numero_normalizado}")
+    
+    # Iteramos por los meses del rango válido
+    fecha_actual = FECHA_INICIO
+    while fecha_actual <= FECHA_FIN:
+        logger.info(f"Buscando en {fecha_actual.strftime('%B %Y')}...")
+        episodios = obtener_episodios(fecha_actual.month, fecha_actual.year)
+        
+        for episodio in episodios:
+            titulo = episodio['titulo']
+            # Extraer el número del título usando regex
+            match = re.match(r'(\d+\.?\d*)', titulo)
+            if match:
+                numero_episodio = match.group(1).replace('.', '')
+                logger.info(f"Comparando {numero_normalizado} con {numero_episodio} del título: {titulo}")
+                if numero_episodio == numero_normalizado:
+                    logger.info(f"¡Encontrado! Episodio: {titulo}")
+                    return episodio
+        
+        # Avanzar al siguiente mes
+        if fecha_actual.month == 12:
+            fecha_actual = fecha_actual.replace(year=fecha_actual.year + 1, month=1)
+        else:
+            fecha_actual = fecha_actual.replace(month=fecha_actual.month + 1)
+    
+    logger.info("No se encontró el episodio después de buscar en todo el rango de fechas")
+    return None
+
+def obtener_url_audio(url_episodio: str) -> str:
+    """
+    Obtiene la URL del episodio para reproducir en el navegador.
+    
+    Args:
+        url_episodio: URL de la página del episodio
+        
+    Returns:
+        URL del episodio
+    """
+    return url_episodio
+
+def descargar_episodio(url: str, numero: str) -> str:
+    """
+    Descarga un episodio de audio.
+    
+    Args:
+        url: URL de descarga del episodio
+        numero: Número del episodio para el nombre del archivo
+        
+    Returns:
+        Ruta al archivo descargado
+    """
+    try:
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+            'Accept': 'audio/webm,audio/ogg,audio/wav,audio/*;q=0.9,application/ogg;q=0.7,video/*;q=0.6,*/*;q=0.5',
+            'Accept-Language': 'es-ES,es;q=0.9,en;q=0.8',
+        }
+        
+        # Crear directorio de descargas si no existe
+        import os
+        download_dir = os.path.expanduser("~/Downloads/discopolis")
+        os.makedirs(download_dir, exist_ok=True)
+        
+        # Nombre del archivo
+        filename = f"discopolis_{numero}.mp3"
+        filepath = os.path.join(download_dir, filename)
+        
+        # Si ya existe el archivo, no lo descargamos de nuevo
+        if os.path.exists(filepath):
+            logger.info(f"El episodio ya está descargado en: {filepath}")
+            return filepath
+            
+        # Descargar el archivo
+        with requests.get(url, headers=headers, stream=True) as r:
+            r.raise_for_status()
+            total = int(r.headers.get('content-length', 0))
+            
+            with open(filepath, 'wb') as f:
+                with click.progressbar(length=total, label='Descargando episodio') as bar:
+                    for chunk in r.iter_content(chunk_size=8192):
+                        if chunk:
+                            f.write(chunk)
+                            bar.update(len(chunk))
+                            
+        logger.info(f"Episodio descargado en: {filepath}")
+        return filepath
+        
+    except Exception as e:
+        logger.error(f"Error al descargar el episodio: {str(e)}")
+        raise
+
 @click.group()
 def cli() -> None:
     """
@@ -256,6 +359,46 @@ def analizar():
     """
     click.echo("Analizando estructura de la API de RTVE...")
     analizar_estructura_api()
+
+@cli.command()
+@click.argument('numero')
+@click.option('--debug/--no-debug', default=False,
+              help='Mostrar información de depuración')
+def reproducir(numero: str, debug: bool) -> None:
+    """
+    Reproduce un episodio específico por su número.
+    
+    Args:
+        numero: Número del episodio (ejemplo: 10939)
+        debug: Si se debe mostrar información de depuración
+    """
+    try:
+        if debug:
+            logging.getLogger().setLevel(logging.INFO)
+        else:
+            logging.getLogger().setLevel(logging.WARNING)
+            
+        click.echo(f"Buscando episodio {numero}...")
+        episodio = buscar_episodio_por_numero(numero)
+        
+        if not episodio:
+            click.echo(f"No se encontró el episodio número {numero}")
+            return
+            
+        click.echo(f"\nEncontrado: {episodio['titulo']}")
+        click.echo(f"Fecha: {episodio['fecha']}")
+        click.echo(f"Duración: {episodio['duracion']}")
+        click.echo(f"URL: {episodio['url']}\n")
+        
+        # Obtener URL del episodio
+        url = obtener_url_audio(episodio['url'])
+        
+        click.echo("Abriendo episodio en el navegador web...")
+        import webbrowser
+        webbrowser.open(url)
+            
+    except Exception as e:
+        click.echo(f"Error: {str(e)}", err=True)
 
 if __name__ == '__main__':
     cli()

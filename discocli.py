@@ -51,35 +51,36 @@ def analizar_estructura_api() -> None:
     Realiza peticiones de prueba y registra la estructura de la respuesta.
     """
     try:
-        # Añadir headers para simular un navegador
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-            'Accept': 'application/json, text/plain, */*',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
             'Accept-Language': 'es-ES,es;q=0.9,en;q=0.8',
-            'Referer': 'https://www.rtve.es/',
         }
         
-        # Intentar obtener los datos
-        response = requests.get(BASE_URL, headers=headers)
+        # Obtener un mes de ejemplo dentro del rango válido
+        url = f"{BASE_URL}?month=3&year=2020&search=&page=1"
+        response = requests.get(url, headers=headers)
         response.raise_for_status()
         
-        logger.info(f"Código de estado: {response.status_code}")
-        logger.info(f"Headers de respuesta: {dict(response.headers)}")
-        
-        # Intentar parsear como JSON primero
-        try:
-            json_data = response.json()
-            logger.info("Respuesta JSON:")
-            logger.info(json.dumps(json_data, indent=2, ensure_ascii=False)[:1000])
-        except json.JSONDecodeError:
-            # Si no es JSON, mostrar como texto
-            logger.info("Respuesta no es JSON. Mostrando como texto:")
-            logger.info(f"Contenido: {response.text[:1000]}...")
+        soup = BeautifulSoup(response.text, 'html.parser')
+        # Analizar un elemento de ejemplo
+        item = soup.select_one('li.elem_')
+        if item:
+            logger.info("=== Análisis detallado de un elemento de episodio ===")
+            # Mostrar todos los atributos del elemento
+            logger.info(f"Atributos del elemento: {item.attrs}")
             
-    except requests.RequestException as e:
-        logger.error(f"Error al hacer la petición: {str(e)}")
-        if hasattr(e.response, 'text'):
-            logger.error(f"Contenido del error: {e.response.text[:500]}")
+            # Analizar data-setup
+            data_setup = json.loads(item.get('data-setup', '{}'))
+            logger.info(f"Contenido de data-setup: {json.dumps(data_setup, indent=2)}")
+            
+            # Buscar elementos específicos
+            for elem in item.select('[class]'):
+                logger.info(f"Elemento con clase '{elem.get('class')}': {elem.text.strip()}")
+                logger.info(f"Atributos: {elem.attrs}")
+            
+    except Exception as e:
+        logger.error(f"Error en el análisis: {str(e)}")
 
 def obtener_episodios(mes: int, anio: int) -> List[Dict[str, Any]]:
     """
@@ -107,36 +108,42 @@ def obtener_episodios(mes: int, anio: int) -> List[Dict[str, Any]]:
             response.raise_for_status()
             soup = BeautifulSoup(response.text, 'html.parser')
             
-            # Buscar todos los elementos de episodio
             items = soup.select('li.elem_')
             if not items:
                 break
                 
             for item in items:
                 try:
-                    # Extraer datos del atributo data-setup
                     data_setup = json.loads(item.get('data-setup', '{}'))
                     
-                    # Extraer título
+                    # Extraer título y número de episodio
                     titulo_elem = item.select_one('.maintitle')
                     titulo = titulo_elem.text.strip() if titulo_elem else data_setup.get('title', 'Sin título')
                     
-                    # Extraer ID y construir URL
-                    id_asset = data_setup.get('idAsset', '')
-                    url_episodio = f"https://www.rtve.es/play/audios/discopolis/{id_asset}/" if id_asset else ''
+                    # Extraer fecha completa
+                    fecha_elem = item.select_one('.datemi')
+                    fecha = fecha_elem.get('aria-label', '').replace('Fecha de Emisión: ', '') if fecha_elem else ''
                     
-                    # Extraer fecha del div.mod si existe
-                    fecha_elem = item.select_one('.mod')
-                    fecha = fecha_elem.get('data-inicio', '') if fecha_elem else ''
+                    # Extraer duración
+                    duracion_elem = item.select_one('.duration')
+                    duracion = duracion_elem.get('aria-label', '').replace('Duración: ', '') if duracion_elem else ''
+                    
+                    # Extraer URL completa
+                    url_elem = item.select_one('.goto_media')
+                    url_episodio = url_elem.get('href', '') if url_elem else ''
+                    
+                    # Extraer ID
+                    id_asset = data_setup.get('idAsset', '')
                     
                     episodio = {
                         "id": id_asset,
                         "titulo": titulo,
                         "url": url_episodio,
                         "fecha": fecha,
+                        "duracion": duracion
                     }
                     
-                    # Intentar extraer descripción si existe
+                    # Extraer descripción si existe
                     desc_elem = item.select_one('.description')
                     if desc_elem:
                         episodio["descripcion"] = desc_elem.text.strip()
@@ -147,7 +154,6 @@ def obtener_episodios(mes: int, anio: int) -> List[Dict[str, Any]]:
                     logger.warning(f"Error al procesar episodio: {str(e)}")
                     continue
             
-            # Verificar si hay más páginas
             if not soup.select('.siguiente'):
                 break
                 
@@ -187,6 +193,12 @@ def formatear_salida(episodios: List[Dict[str, Any]], formato: str) -> str:
             resultado.append(f"Título: {ep['titulo']}")
             if ep.get('fecha'):
                 resultado.append(f"Fecha: {ep['fecha']}")
+            if ep.get('duracion'):
+                resultado.append(f"Duración: {ep['duracion']}")
+            if ep.get('programa'):
+                resultado.append(f"Programa: {ep['programa']}")
+            if ep.get('emisora'):
+                resultado.append(f"Emisora: {ep['emisora']}")
             if ep.get('descripcion'):
                 resultado.append(f"Descripción: {ep['descripcion']}")
             if ep.get('url'):
